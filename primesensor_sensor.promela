@@ -2,7 +2,7 @@
 #define TRUE 1
 #define FALSE 0
 #define MUTEX_MAX 3
-#define FIX
+/*#define ORIGINAL*/
 
 typedef Mutex {
   int id;
@@ -26,9 +26,17 @@ typedef XnFrameBufferManager {
   XnBufferPool m_pBufferPool;
 };
 
+typedef XnFrameStream {
+  int pLockedBuffer;
+};
 
-XnFrameBufferManager tripleBuffer;
-int XnFrameStream_m_pLockedBuffer = NULL;
+typedef XnServerSensorInvoker {
+  int pLockedBuffer;
+};
+
+XnFrameBufferManager frame_buffer_manager;
+XnFrameStream frame_stream;
+XnServerSensorInvoker server_sensor_invoker;
 
 /*
  * OSCriticalSection
@@ -101,7 +109,9 @@ inline XnBufferPool_AddRef(this, pBuffer)
 {
   xnOSEnterCriticalSection(this.m_hLock);
   printf("AddRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
+  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= 5)
   assert(pBuffer != NULL);
+  assert(!this.buffers[pBuffer].free);
   this.buffers[pBuffer].m_nRefCount++;
   xnOSLeaveCriticalSection(this.m_hLock);
 }
@@ -111,14 +121,29 @@ inline XnBufferPool_DecRef(this, pBuffer)
   xnOSEnterCriticalSection(this.m_hLock);
   printf("DecRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
   assert(pBuffer != NULL);
+#ifndef ORIGINAL
   assert(this.buffers[pBuffer].m_nRefCount > 0);
+#endif
   this.buffers[pBuffer].m_nRefCount--;
   if
     :: (this.buffers[pBuffer].m_nRefCount == 0) -> {
+      printf("FREE(pBuffer=%d)\n", pBuffer);
       this.buffers[pBuffer].free = TRUE;
     }
     :: else -> skip;
   fi;
+  xnOSLeaveCriticalSection(this.m_hLock);
+}
+
+inline XnBufferPool_CopyRef(this, pDstBuffer, pSrcBuffer)
+{
+  xnOSEnterCriticalSection(this.m_hLock);
+  printf("CopyRef(pBuffer=%d, m_nRefCount=%d)\n", pSrcBuffer, this.buffers[pSrcBuffer].m_nRefCount);
+  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= 5)
+  assert(pSrcBuffer != NULL);
+  assert(!this.buffers[pSrcBuffer].free);
+  this.buffers[pSrcBuffer].m_nRefCount++;
+  pDstBuffer = pSrcBuffer;
   xnOSLeaveCriticalSection(this.m_hLock);
 }
 
@@ -160,12 +185,10 @@ inline XnBufferPool_GetBuffer(this, pBuffer, ret)
 inline XnFrameBufferManager_init(this)
 {
   bool ret;
-  atomic {
-    xnOSCriticalSection_init(this.m_hLock);
-    XnBufferPool_init(this.m_pBufferPool);
-    this.m_pStableBuffer = NULL;
-    XnBufferPool_GetBuffer(this.m_pBufferPool, this.m_pWorkingBuffer, ret);
-  }
+  xnOSCriticalSection_init(this.m_hLock);
+  XnBufferPool_init(this.m_pBufferPool);
+  this.m_pStableBuffer = NULL;
+  XnBufferPool_GetBuffer(this.m_pBufferPool, this.m_pWorkingBuffer, ret);
 }
 
 inline XnFrameBufferManager_MarkWriteBufferAsStable(this)
@@ -175,89 +198,175 @@ inline XnFrameBufferManager_MarkWriteBufferAsStable(this)
   xnOSEnterCriticalSection(this.m_hLock);
   XnBufferPool_Lock(this.m_pBufferPool);
   pPrevStable = this.m_pStableBuffer;
+#ifdef ORIGINAL
+  /* This will cause release of this.m_pStableBuffer*/
   if
     :: (this.m_pStableBuffer != NULL) -> XnBufferPool_DecRef(this.m_pBufferPool, this.m_pStableBuffer);
     :: else -> skip;
   fi
+#endif
   this.m_pStableBuffer = this.m_pWorkingBuffer;
   XnBufferPool_GetBuffer(this.m_pBufferPool, this.m_pWorkingBuffer, ret);
   if
     :: (ret == FALSE) -> {
-      /*assert(FALSE);*/
+      /* assert(FALSE); */
       this.m_pStableBuffer = pPrevStable;
-      XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
+#ifdef ORIGINAL
+      /* this.m_pStableBuffer may be released already */
+      XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer)
+#endif
       XnBufferPool_Unlock(this.m_pBufferPool);
-#ifdef FIX
+#ifndef ORIGINAL
+      /* Needed */
       xnOSLeaveCriticalSection(this.m_hLock);
 #endif
     }
     :: else -> {
-#ifdef FIX
-      XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
+#ifndef ORIGINAL
+      /* Relase */
+      if
+        :: (pPrevStable != NULL) -> XnBufferPool_DecRef(this.m_pBufferPool, pPrevStable);
+        :: else -> skip;
+      fi
 #endif
       XnBufferPool_Unlock(this.m_pBufferPool);
       xnOSLeaveCriticalSection(this.m_hLock);
     }
   fi
-  printf("StableBuffer=%d\n", this.m_pStableBuffer);
+  assert(this.m_pStableBuffer != this.m_pWorkingBuffer);
+  printf("StableBuffer=%d, WorkingBuffer=%d\n", this.m_pStableBuffer, this.m_pWorkingBuffer);
 }
 
 inline XnFrameBufferManager_ReadLastStableBuffer(this, pBuffer)
 {
   xnOSEnterCriticalSection(this.m_hLock);
+#ifdef ORIGINAL
+  /* pBuffer should not be updated, before adding reference */
   pBuffer = this.m_pStableBuffer;
+#endif
   if
     :: (this.m_pStableBuffer != NULL) -> {
       XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
     }
     :: else -> skip;
   fi
+#ifndef ORIGINAL
+  /* Update pBuffer afre adding reference */
+  pBuffer = this.m_pStableBuffer;
+#endif
   printf("StableBuffer=%d\n", pBuffer);
   xnOSLeaveCriticalSection(this.m_hLock);
 }
 
-proctype XnFrameStreamProcessor()
+/*
+ * XnFrameStreamProcessor
+ */
+inline XnFrameStreamProcessor_OnEndOfFrame()
+{
+  XnFrameBufferManager_MarkWriteBufferAsStable(frame_buffer_manager);
+}
+
+/*
+ * XnFrameStream
+ */
+inline XnFrameStream_init(this)
+{
+  this.pLockedBuffer = NULL;
+}
+
+inline XnFrameStream_ReadImpl(this)
+{
+#ifndef ORIGINAL
+  int pPrevLocked;
+#endif
+#ifdef ORIGINAL
+  /* This will cause release of this.pLockedBuffer */
+  if
+    :: this.pLockedBuffer != NULL -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer);
+    :: else -> skip;
+  fi;
+#else
+  pPrevLocked = this.pLockedBuffer;
+#endif
+  XnFrameBufferManager_ReadLastStableBuffer(frame_buffer_manager, this.pLockedBuffer);
+#ifndef ORIGINAL
+  /* Should be released */
+  if
+    :: pPrevLocked != NULL -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, pPrevLocked);
+    :: else -> skip;
+  fi;
+#endif
+  printf("LockedBuffer=%d\n", this.pLockedBuffer);
+}
+
+/*
+ * XnServerSensorInvoker
+ */
+inline XnServerSensorInvoker_init(this)
+{
+  this.pLockedBuffer = NULL;
+}
+
+inline XnServerSensorInvoker_ReadStream(this)
+{
+  if
+    :: this.pLockedBuffer != NULL
+       -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer);
+    :: else -> skip;
+  fi;
+#ifdef ORIGINAL
+  this.pLockedBuffer = frame_stream.pLockedBuffer;
+  printf("Locked=%d\n", this.pLockedBuffer);
+  if
+    :: this.pLockedBuffer != NULL
+       -> XnBufferPool_AddRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer);
+    :: else -> skip;
+  fi;
+#else
+  if
+    :: frame_stream.pLockedBuffer != NULL -> {
+      -> XnBufferPool_CopyRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer, frame_stream.pLockedBuffer);
+      printf("Locked=%d\n", this.pLockedBuffer);
+    }
+    :: else -> skip;
+  fi;
+#endif
+}
+
+/*
+ * Threads
+ */
+proctype XnFrameStreamProcessor_run()
 {
   do
-    :: 1 ->
-       XnFrameBufferManager_MarkWriteBufferAsStable(tripleBuffer);
+    :: 1->
+       XnFrameStreamProcessor_OnEndOfFrame();
   od
 }
 
-proctype XnFrameStream()
+proctype XnFrameStream_run()
 {
+  XnFrameStream_init(frame_stream);
   do
-    :: 1 ->
-       if
-         :: XnFrameStream_m_pLockedBuffer != NULL -> XnBufferPool_DecRef(tripleBuffer.m_pBufferPool, XnFrameStream_m_pLockedBuffer);
-         :: else -> skip;
-       fi;
-       XnFrameBufferManager_ReadLastStableBuffer(tripleBuffer, XnFrameStream_m_pLockedBuffer);
+    :: 1 -> XnFrameStream_ReadImpl(frame_stream);
   od
 }
 
-proctype XnServerSensorInvoker()
+proctype XnServerSensorInvoker_run()
 {
-  int pLockedBuffer = NULL;
+  XnServerSensorInvoker_init(server_sensor_invoker);
   do
-    :: 1 ->
-       if
-         :: pLockedBuffer != NULL -> XnBufferPool_DecRef(tripleBuffer.m_pBufferPool, pLockedBuffer);
-         :: else -> skip;
-       fi;
-       pLockedBuffer = XnFrameStream_m_pLockedBuffer;
-       if
-         :: pLockedBuffer != NULL -> XnBufferPool_AddRef(tripleBuffer.m_pBufferPool, pLockedBuffer);
-         :: else -> skip;
-       fi;
+    :: 1 -> XnServerSensorInvoker_ReadStream(server_sensor_invoker);
   od
 }
 
 init {
-  XnFrameBufferManager_init(tripleBuffer);
+  XnFrameBufferManager_init(frame_buffer_manager);
   atomic {
-    run XnFrameStreamProcessor();
-    run XnFrameStream();
-    run XnServerSensorInvoker();
+    run XnFrameStreamProcessor_run();
+    run XnFrameStream_run();
+    run XnServerSensorInvoker_run();
   }
 }
+
+ltl pr { ! <>[](server_sensor_invoker.pLockedBuffer==1) }
