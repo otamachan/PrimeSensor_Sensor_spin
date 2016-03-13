@@ -1,12 +1,38 @@
-#define NULL 255
+#define NULL -1
 #define TRUE 1
 #define FALSE 0
+#define MUTEX_MAX 3
+#define FIX
 
 typedef Mutex {
-  byte id;
-  byte count;
+  int id;
+  int count;
 };
 
+typedef XnBuffer {
+  bool free;
+  int m_nRefCount;
+};
+
+typedef XnBufferPool {
+  Mutex m_hLock;
+  XnBuffer buffers[3];
+};
+
+typedef XnFrameBufferManager {
+  Mutex m_hLock;
+  int m_pStableBuffer;
+  int m_pWorkingBuffer;
+  XnBufferPool m_pBufferPool;
+};
+
+
+XnFrameBufferManager tripleBuffer;
+int XnFrameStream_m_pLockedBuffer = NULL;
+
+/*
+ * OSCriticalSection
+ */
 inline xnOSCriticalSection_init(mutex){
   mutex.id = -1;
   mutex.count = 0;
@@ -15,7 +41,7 @@ inline xnOSCriticalSection_init(mutex){
 inline xnOSEnterCriticalSection(mutex)
 {
   if
-    :: mutex.count < 3 -> {
+    :: mutex.count < MUTEX_MAX -> {
       do
         :: 1-> atomic {
           if
@@ -50,28 +76,6 @@ inline xnOSLeaveCriticalSection(mutex)
   }
 }
 
-typedef XnBuffer {
-  bool free;
-  byte m_nRefCount;
-};
-
-typedef XnBufferPool {
-  Mutex m_hLock;
-  XnBuffer buffers[3];
-};
-
-typedef XnFrameBufferManager {
-  Mutex m_hLock;
-  byte m_pStableBuffer;
-  byte m_pWorkingBuffer;
-  XnBufferPool m_pBufferPool;
-};
-
-
-XnFrameBufferManager tripleBuffer;
-XnBuffer XnFrameBufferManager_pBufferPool[6];
-byte XnFrameStream_m_pLockedBuffer = NULL;
-
 /*
  * XnBufferPool
  */
@@ -95,18 +99,19 @@ inline XnBufferPool_Unlock(this)
 
 inline XnBufferPool_AddRef(this, pBuffer)
 {
-  assert(pBuffer != NULL);
   xnOSEnterCriticalSection(this.m_hLock);
   printf("AddRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
+  assert(pBuffer != NULL);
   this.buffers[pBuffer].m_nRefCount++;
   xnOSLeaveCriticalSection(this.m_hLock);
 }
 
 inline XnBufferPool_DecRef(this, pBuffer)
 {
-  assert(pBuffer != NULL);
   xnOSEnterCriticalSection(this.m_hLock);
   printf("DecRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
+  assert(pBuffer != NULL);
+  assert(this.buffers[pBuffer].m_nRefCount > 0);
   this.buffers[pBuffer].m_nRefCount--;
   if
     :: (this.buffers[pBuffer].m_nRefCount == 0) -> {
@@ -144,6 +149,7 @@ inline XnBufferPool_GetBuffer(this, pBuffer, ret)
     }
     :: else -> {
       ret = FALSE;
+      printf("GetBuffer FAILED\n");
     }
   fi
   xnOSLeaveCriticalSection(this.m_hLock);
@@ -164,7 +170,7 @@ inline XnFrameBufferManager_init(this)
 
 inline XnFrameBufferManager_MarkWriteBufferAsStable(this)
 {
-  byte pPrevStable;
+  int pPrevStable;
   bool ret;
   xnOSEnterCriticalSection(this.m_hLock);
   XnBufferPool_Lock(this.m_pBufferPool);
@@ -181,9 +187,14 @@ inline XnFrameBufferManager_MarkWriteBufferAsStable(this)
       this.m_pStableBuffer = pPrevStable;
       XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
       XnBufferPool_Unlock(this.m_pBufferPool);
-      /*xnOSLeaveCriticalSection(this.m_hLock);*/
+#ifdef FIX
+      xnOSLeaveCriticalSection(this.m_hLock);
+#endif
     }
     :: else -> {
+#ifdef FIX
+      XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
+#endif
       XnBufferPool_Unlock(this.m_pBufferPool);
       xnOSLeaveCriticalSection(this.m_hLock);
     }
@@ -209,7 +220,6 @@ proctype XnFrameStreamProcessor()
 {
   do
     :: 1 ->
-progress:
        XnFrameBufferManager_MarkWriteBufferAsStable(tripleBuffer);
   od
 }
@@ -218,7 +228,6 @@ proctype XnFrameStream()
 {
   do
     :: 1 ->
-progress:
        if
          :: XnFrameStream_m_pLockedBuffer != NULL -> XnBufferPool_DecRef(tripleBuffer.m_pBufferPool, XnFrameStream_m_pLockedBuffer);
          :: else -> skip;
@@ -229,10 +238,9 @@ progress:
 
 proctype XnServerSensorInvoker()
 {
-  byte pLockedBuffer = NULL;
+  int pLockedBuffer = NULL;
   do
     :: 1 ->
-progress:
        if
          :: pLockedBuffer != NULL -> XnBufferPool_DecRef(tripleBuffer.m_pBufferPool, pLockedBuffer);
          :: else -> skip;
