@@ -3,6 +3,8 @@
 #define FALSE 0
 #define MUTEX_MAX 3
 /*#define ORIGINAL*/
+#define FIX1
+/*#define FIX2*/
 
 typedef Mutex {
   int id;
@@ -38,6 +40,13 @@ XnFrameBufferManager frame_buffer_manager;
 XnFrameStream frame_stream;
 XnServerSensorInvoker server_sensor_invoker;
 
+inline print()
+{
+  printf(" ref[0]=%d ref[1]=%d ref[2]=%d\n",
+         frame_buffer_manager.m_pBufferPool.buffers[0].m_nRefCount,
+         frame_buffer_manager.m_pBufferPool.buffers[1].m_nRefCount,
+         frame_buffer_manager.m_pBufferPool.buffers[2].m_nRefCount);
+}
 /*
  * OSCriticalSection
  */
@@ -108,7 +117,8 @@ inline XnBufferPool_Unlock(this)
 inline XnBufferPool_AddRef(this, pBuffer)
 {
   xnOSEnterCriticalSection(this.m_hLock);
-  printf("AddRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
+  printf("AddRef[%d](pBuffer=%d)\n", _pid, pBuffer);
+  print();
   assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= 5)
   assert(pBuffer != NULL);
   assert(!this.buffers[pBuffer].free);
@@ -119,7 +129,8 @@ inline XnBufferPool_AddRef(this, pBuffer)
 inline XnBufferPool_DecRef(this, pBuffer)
 {
   xnOSEnterCriticalSection(this.m_hLock);
-  printf("DecRef(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, this.buffers[pBuffer].m_nRefCount);
+  printf("DecRef[%d](pBuffer=%d)\n", _pid, pBuffer);
+  print();
   assert(pBuffer != NULL);
 #ifndef ORIGINAL
   assert(this.buffers[pBuffer].m_nRefCount > 0);
@@ -138,12 +149,17 @@ inline XnBufferPool_DecRef(this, pBuffer)
 inline XnBufferPool_CopyRef(this, pDstBuffer, pSrcBuffer)
 {
   xnOSEnterCriticalSection(this.m_hLock);
-  printf("CopyRef(pBuffer=%d, m_nRefCount=%d)\n", pSrcBuffer, this.buffers[pSrcBuffer].m_nRefCount);
+  printf("CopyRef[%d](pBuffer=%d)\n", _pid, pSrcBuffer);
+  print();
   assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= 5)
-  assert(pSrcBuffer != NULL);
-  assert(!this.buffers[pSrcBuffer].free);
-  this.buffers[pSrcBuffer].m_nRefCount++;
-  pDstBuffer = pSrcBuffer;
+  if
+    :: pSrcBuffer != NULL -> {
+      assert(!this.buffers[pSrcBuffer].free);
+      this.buffers[pSrcBuffer].m_nRefCount++;
+      pDstBuffer = pSrcBuffer;
+    }
+    :: else -> skip;
+  fi
   xnOSLeaveCriticalSection(this.m_hLock);
 }
 
@@ -193,46 +209,58 @@ inline XnFrameBufferManager_init(this)
 
 inline XnFrameBufferManager_MarkWriteBufferAsStable(this)
 {
+#ifdef ORIGINAL
   int pPrevStable;
   bool ret;
   xnOSEnterCriticalSection(this.m_hLock);
   XnBufferPool_Lock(this.m_pBufferPool);
   pPrevStable = this.m_pStableBuffer;
-#ifdef ORIGINAL
   /* This will cause release of this.m_pStableBuffer*/
   if
     :: (this.m_pStableBuffer != NULL) -> XnBufferPool_DecRef(this.m_pBufferPool, this.m_pStableBuffer);
     :: else -> skip;
   fi
-#endif
   this.m_pStableBuffer = this.m_pWorkingBuffer;
   XnBufferPool_GetBuffer(this.m_pBufferPool, this.m_pWorkingBuffer, ret);
   if
     :: (ret == FALSE) -> {
       /* assert(FALSE); */
       this.m_pStableBuffer = pPrevStable;
-#ifdef ORIGINAL
       /* this.m_pStableBuffer may be released already */
       XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer)
-#endif
       XnBufferPool_Unlock(this.m_pBufferPool);
-#ifndef ORIGINAL
-      /* Needed */
-      xnOSLeaveCriticalSection(this.m_hLock);
-#endif
     }
     :: else -> {
-#ifndef ORIGINAL
-      /* Relase */
-      if
-        :: (pPrevStable != NULL) -> XnBufferPool_DecRef(this.m_pBufferPool, pPrevStable);
-        :: else -> skip;
-      fi
-#endif
       XnBufferPool_Unlock(this.m_pBufferPool);
       xnOSLeaveCriticalSection(this.m_hLock);
     }
   fi
+#endif
+#ifdef FIX1
+  int pNewWorking;
+  bool ret;
+  xnOSEnterCriticalSection(this.m_hLock);
+  XnBufferPool_GetBuffer(this.m_pBufferPool, pNewWorking, ret);
+  if
+    :: (ret == FALSE) -> {
+      /* assert(FALSE); */
+      /* Needed */
+      xnOSLeaveCriticalSection(this.m_hLock);
+    }
+    :: else -> {
+      /* Release */
+      if
+        :: (this.m_pStableBuffer != NULL) -> {
+          XnBufferPool_DecRef(this.m_pBufferPool, this.m_pStableBuffer);
+        }
+        :: else -> skip;
+      fi
+      this.m_pStableBuffer = this.m_pWorkingBuffer;
+      this.m_pWorkingBuffer = pNewWorking;
+      xnOSLeaveCriticalSection(this.m_hLock);
+    }
+  fi
+#endif
   assert(this.m_pStableBuffer != this.m_pWorkingBuffer);
   printf("StableBuffer=%d, WorkingBuffer=%d\n", this.m_pStableBuffer, this.m_pWorkingBuffer);
 }
@@ -243,16 +271,15 @@ inline XnFrameBufferManager_ReadLastStableBuffer(this, pBuffer)
 #ifdef ORIGINAL
   /* pBuffer should not be updated, before adding reference */
   pBuffer = this.m_pStableBuffer;
-#endif
   if
     :: (this.m_pStableBuffer != NULL) -> {
       XnBufferPool_AddRef(this.m_pBufferPool, this.m_pStableBuffer);
     }
     :: else -> skip;
   fi
-#ifndef ORIGINAL
-  /* Update pBuffer afre adding reference */
-  pBuffer = this.m_pStableBuffer;
+#endif
+#ifdef FIX1
+  XnBufferPool_CopyRef(this.m_pBufferPool, pBuffer, this.m_pStableBuffer);
 #endif
   printf("StableBuffer=%d\n", pBuffer);
   xnOSLeaveCriticalSection(this.m_hLock);
@@ -276,7 +303,7 @@ inline XnFrameStream_init(this)
 
 inline XnFrameStream_ReadImpl(this)
 {
-#ifndef ORIGINAL
+#ifdef FIX1
   int pPrevLocked;
 #endif
 #ifdef ORIGINAL
@@ -285,11 +312,12 @@ inline XnFrameStream_ReadImpl(this)
     :: this.pLockedBuffer != NULL -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer);
     :: else -> skip;
   fi;
-#else
+#endif
+#ifdef FIX1
   pPrevLocked = this.pLockedBuffer;
 #endif
   XnFrameBufferManager_ReadLastStableBuffer(frame_buffer_manager, this.pLockedBuffer);
-#ifndef ORIGINAL
+#ifdef FIX1
   /* Should be released */
   if
     :: pPrevLocked != NULL -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, pPrevLocked);
@@ -309,6 +337,10 @@ inline XnServerSensorInvoker_init(this)
 
 inline XnServerSensorInvoker_ReadStream(this)
 {
+#ifdef FIX1
+  int pLockedBuffer;
+#endif
+  printf("ReadStream(this.pLockedBuffer=%d)\n", this.pLockedBuffer);
   if
     :: this.pLockedBuffer != NULL
        -> XnBufferPool_DecRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer);
@@ -324,8 +356,8 @@ inline XnServerSensorInvoker_ReadStream(this)
   fi;
 #else
   if
-    :: frame_stream.pLockedBuffer != NULL -> {
-      -> XnBufferPool_CopyRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer, frame_stream.pLockedBuffer);
+    :: pLockedBuffer != NULL -> {
+      XnBufferPool_CopyRef(frame_buffer_manager.m_pBufferPool, this.pLockedBuffer, frame_stream.pLockedBuffer);
       printf("Locked=%d\n", this.pLockedBuffer);
     }
     :: else -> skip;
@@ -346,7 +378,6 @@ proctype XnFrameStreamProcessor_run()
 
 proctype XnFrameStream_run()
 {
-  XnFrameStream_init(frame_stream);
   do
     :: 1 -> XnFrameStream_ReadImpl(frame_stream);
   od
@@ -354,7 +385,6 @@ proctype XnFrameStream_run()
 
 proctype XnServerSensorInvoker_run()
 {
-  XnServerSensorInvoker_init(server_sensor_invoker);
   do
     :: 1 -> XnServerSensorInvoker_ReadStream(server_sensor_invoker);
   od
@@ -362,6 +392,8 @@ proctype XnServerSensorInvoker_run()
 
 init {
   XnFrameBufferManager_init(frame_buffer_manager);
+  XnFrameStream_init(frame_stream);
+  XnServerSensorInvoker_init(server_sensor_invoker);
   atomic {
     run XnFrameStreamProcessor_run();
     run XnFrameStream_run();
@@ -369,4 +401,4 @@ init {
   }
 }
 
-ltl pr { ! <>[](server_sensor_invoker.pLockedBuffer==1) }
+ltl pr { ! <>[](server_sensor_invoker.pLockedBuffer==1 && (!<> server_sensor_invoker.pLockedBuffer!=1)) }
