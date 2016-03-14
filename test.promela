@@ -1,0 +1,41 @@
+#define NULL -1
+#define TRUE 1
+#define FALSE 0
+#define COND (i>40)
+
+int i;
+bit b = 0;
+proctype A()
+{
+  i = 0;
+  do
+    :: 1 -> {
+      printf("i=%d\n",i);
+      i++;
+      if
+        :: i == 5 && b -> i = 30;
+        :: i == 35 && b -> i = 40;
+        :: i == 20 -> i= 0;
+        :: i == 38 -> i= 0;
+        :: i == 45 && b -> i= 41;
+        :: i == 50 -> i= 41;
+        :: else -> skip;
+      fi
+    }
+  od
+}
+proctype B()
+{
+  do
+    :: 1-> b = 1;
+    :: 1-> b = 0;
+  od
+}
+
+init
+{
+  run A();
+  run B();
+}
+
+ltl pr {!<>((COND) && (<>(!(COND))))}
