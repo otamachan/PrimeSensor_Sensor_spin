@@ -1,14 +1,58 @@
 #define AT_A 0
-#define AT_B 1
-#define ON_BOAT 2
+#define TO_B 1
+#define AT_B 2
 #define TO_A 3
-#define TO_B 4
+#define ON_BOAT 4
 
+#define NUM_ON_BOAT ((wolf[0]==ON_BOAT) + \
+                     (wolf[1]==ON_BOAT) + \
+                     (wolf[2]==ON_BOAT) + \
+                     (sheep[0]==ON_BOAT) + \
+                     (sheep[1]==ON_BOAT) + \
+                     (sheep[2]==ON_BOAT))
+#define WOLF_AT_A ((wolf[0]==AT_A) + \
+                   (wolf[1]==AT_A) + \
+                   (wolf[2]==AT_A))
+#define WOLF_AT_B ((wolf[0]==AT_B) + \
+                   (wolf[1]==AT_B) + \
+                   (wolf[2]==AT_B))
+#define SHEEP_AT_A ((sheep[0]==AT_A) + \
+                    (sheep[1]==AT_A) + \
+                    (sheep[2]==AT_A))
+#define SHEEP_AT_B ((sheep[0]==AT_B) + \
+                    (sheep[1]==AT_B) + \
+                    (sheep[2]==AT_B))
+#define CONSTRAIN ((boat==TO_B -> (NUM_ON_BOAT >= 1 && NUM_ON_BOAT <= 2)) && \
+                   (boat==TO_A -> (NUM_ON_BOAT >= 1 && NUM_ON_BOAT <= 2)) && \
+                   (WOLF_AT_A <= SHEEP_AT_A) && \
+                   (WOLF_AT_B <= SHEEP_AT_B))
+#define GOAL ((wolf[0]==AT_B) && \
+              (wolf[1]==AT_B) && \
+              (wolf[2]==AT_B) && \
+              (sheep[0]==AT_B) && \
+              (sheep[1]==AT_B) && \
+              (sheep[2]==AT_B))
 byte wolf[3];
 byte sheep[3];
 byte boat;
 
-init()
+inline get_off(animal, place)
+{
+  if
+    :: animal == ON_BOAT -> animal = place;
+    :: 1 -> skip;
+  fi
+}
+
+inline get_on(animal, place)
+{
+  if
+    :: animal == place -> animal = ON_BOAT;
+    :: 1 -> skip;
+  fi
+}
+
+init
 {
   atomic {
     boat = AT_A;
@@ -22,33 +66,45 @@ init()
   do
     :: boat == AT_A ->
        atomic {
+         get_on(wolf[0], AT_A);
+         get_on(wolf[1], AT_A);
+         get_on(wolf[2], AT_A);
+         get_on(sheep[0], AT_A);
+         get_on(sheep[1], AT_A);
+         get_on(sheep[2], AT_A);
+         boat = TO_B;
+       }
+    :: boat == TO_B ->
+       atomic {
+         get_off(wolf[0], AT_B);
+         get_off(wolf[1], AT_B);
+         get_off(wolf[2], AT_B);
+         get_off(sheep[0], AT_B);
+         get_off(sheep[1], AT_B);
+         get_off(sheep[2], AT_B);
+         boat = AT_B;
+       }
+    :: boat == AT_B ->
+       atomic {
+         get_on(wolf[0], AT_B);
+         get_on(wolf[1], AT_B);
+         get_on(wolf[2], AT_B);
+         get_on(sheep[0], AT_B);
+         get_on(sheep[1], AT_B);
+         get_on(sheep[2], AT_B);
+         boat = TO_A;
+         }
+    :: boat == TO_A ->
+       atomic {
          get_off(wolf[0], AT_A);
          get_off(wolf[1], AT_A);
          get_off(wolf[2], AT_A);
          get_off(sheep[0], AT_A);
          get_off(sheep[1], AT_A);
          get_off(sheep[2], AT_A);
-         boat = ON_BOAT;
-       }
-    :: boat == ON_BOAT ->
-       atomic {
-         get_on(wolf[0]);
-         get_on(wolf[1]);
-         get_on(wolf[2]);
-         get_on(sheep[0]);
-         get_on(sheep[1]);
-         get_on(sheep[2]);
-         boat = AT_B;
-       }
-    :: boat == ON_BOAT ->
-       atomic {
-         get_on(wolf[0]);
-         get_on(wolf[1]);
-         get_on(wolf[2]);
-         get_on(sheep[0]);
-         get_on(sheep[1]);
-         get_on(sheep[2]);
-         boat = AT_B;
+         boat = AT_A;
        }
   od
 }
+
+ltl pp { ! (CONSTRAIN U GOAL)}
