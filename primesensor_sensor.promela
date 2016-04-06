@@ -2,7 +2,8 @@
 #define TRUE 1
 #define FALSE 0
 #define MUTEX_MAX 3
-#define MAX_REFS 6
+#define REFS_MAX 6
+#define BUF_NUM 5
 #define COND (server_sensor_invoker.pLockedBuffer==1)
 /*#define ORIGINAL*/
 #define FIX1
@@ -19,7 +20,7 @@ typedef XnBuffer {
 
 typedef XnBufferPool {
   Mutex m_hLock;
-  XnBuffer buffers[3];
+  XnBuffer buffers[6];
 };
 
 typedef XnFrameBufferManager {
@@ -103,6 +104,9 @@ inline XnBufferPool_init(this)
   this.buffers[0].free = TRUE;
   this.buffers[1].free = TRUE;
   this.buffers[2].free = TRUE;
+  this.buffers[3].free = TRUE;
+  this.buffers[4].free = TRUE;
+  this.buffers[5].free = TRUE;
 }
 
 inline XnBufferPool_Lock(this)
@@ -120,8 +124,9 @@ inline XnBufferPool_AddRef(this, pBuffer)
   xnOSEnterCriticalSection(this.m_hLock);
   printf("AddRef[%d](pBuffer=%d)\n", _pid, pBuffer);
   print();
-  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= MAX_REFS)
+  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= REFS_MAX)
   assert(pBuffer != NULL);
+  assert(this.buffers[pBuffer].m_nRefCount>0);
   assert(!this.buffers[pBuffer].free);
   this.buffers[pBuffer].m_nRefCount++;
   xnOSLeaveCriticalSection(this.m_hLock);
@@ -141,6 +146,7 @@ inline XnBufferPool_DecRef(this, pBuffer)
     :: (this.buffers[pBuffer].m_nRefCount == 0) -> {
       printf("FREE(pBuffer=%d)\n", pBuffer);
       this.buffers[pBuffer].free = TRUE;
+      pBuffer = NULL;
     }
     :: else -> skip;
   fi;
@@ -153,10 +159,11 @@ inline XnBufferPool_CopyRef(this, pDstBuffer, pSrcBuffer)
   xnOSEnterCriticalSection(this.m_hLock);
   printf("CopyRef[%d](pBuffer=%d)\n", _pid, pSrcBuffer);
   print();
-  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= MAX_REFS)
+  assert(this.buffers[0].m_nRefCount + this.buffers[1].m_nRefCount + this.buffers[2].m_nRefCount <= REFS_MAX)
   if
     :: pSrcBuffer != NULL -> {
       assert(!this.buffers[pSrcBuffer].free);
+      assert(this.buffers[pSrcBuffer].m_nRefCount>0);
       this.buffers[pSrcBuffer].m_nRefCount++;
       pDstBuffer = pSrcBuffer;
     }
@@ -170,24 +177,45 @@ inline XnBufferPool_GetBuffer(this, pBuffer, ret)
 {
   xnOSEnterCriticalSection(this.m_hLock);
   if
-    :: this.buffers[0].free -> {
+    :: this.buffers[0].free && BUF_NUM >= 1 -> {
       this.buffers[0].free = FALSE;
       this.buffers[0].m_nRefCount = 1;
       pBuffer = 0;
       ret = TRUE;
       printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
     }
-    :: this.buffers[1].free -> {
+    :: this.buffers[1].free && BUF_NUM >= 2 -> {
       this.buffers[1].free = FALSE;
       this.buffers[1].m_nRefCount = 1;
       pBuffer = 1;
       ret = TRUE;
       printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
     }
-    :: this.buffers[2].free -> {
+    :: this.buffers[2].free && BUF_NUM >= 3 -> {
       this.buffers[2].free = FALSE;
       this.buffers[2].m_nRefCount = 1;
       pBuffer = 2;
+      ret = TRUE;
+      printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
+    }
+    :: this.buffers[3].free && BUF_NUM >= 4 -> {
+      this.buffers[3].free = FALSE;
+      this.buffers[3].m_nRefCount = 1;
+      pBuffer = 3;
+      ret = TRUE;
+      printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
+    }
+    :: this.buffers[4].free && BUF_NUM >= 5 -> {
+      this.buffers[4].free = FALSE;
+      this.buffers[4].m_nRefCount = 1;
+      pBuffer = 4;
+      ret = TRUE;
+      printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
+    }
+    :: this.buffers[5].free && BUF_NUM >= 6 -> {
+      this.buffers[5].free = FALSE;
+      this.buffers[5].m_nRefCount = 1;
+      pBuffer = 5;
       ret = TRUE;
       printf("GetBuffer(pBuffer=%d, m_nRefCount=%d)\n", pBuffer, 1);
     }
@@ -397,4 +425,4 @@ init {
   }
 }
 
-ltl pr {!<>((COND) && (<>(!(COND))))}
+/*ltl pr {!<>((COND) && (<>(!(COND))))}*/

@@ -1,0 +1,54 @@
+#define AT_A 0
+#define AT_B 1
+#define ON_BOAT 2
+#define TO_A 3
+#define TO_B 4
+
+byte wolf[3];
+byte sheep[3];
+byte boat;
+
+init()
+{
+  atomic {
+    boat = AT_A;
+    wolf[0] = AT_A;
+    wolf[1] = AT_A;
+    wolf[2] = AT_A;
+    sheep[0] = AT_A;
+    sheep[1] = AT_A;
+    sheep[2] = AT_A;
+  }
+  do
+    :: boat == AT_A ->
+       atomic {
+         get_off(wolf[0], AT_A);
+         get_off(wolf[1], AT_A);
+         get_off(wolf[2], AT_A);
+         get_off(sheep[0], AT_A);
+         get_off(sheep[1], AT_A);
+         get_off(sheep[2], AT_A);
+         boat = ON_BOAT;
+       }
+    :: boat == ON_BOAT ->
+       atomic {
+         get_on(wolf[0]);
+         get_on(wolf[1]);
+         get_on(wolf[2]);
+         get_on(sheep[0]);
+         get_on(sheep[1]);
+         get_on(sheep[2]);
+         boat = AT_B;
+       }
+    :: boat == ON_BOAT ->
+       atomic {
+         get_on(wolf[0]);
+         get_on(wolf[1]);
+         get_on(wolf[2]);
+         get_on(sheep[0]);
+         get_on(sheep[1]);
+         get_on(sheep[2]);
+         boat = AT_B;
+       }
+  od
+}
